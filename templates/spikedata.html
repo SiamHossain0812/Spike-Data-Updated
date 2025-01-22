@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike Data</title>
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,200..1000;1,200..1000&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Include Select2 CSS -->
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0-beta.1/css/select2.min.css"
+      rel="stylesheet"
+    />
+
+    <!-- Include jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <!-- Include Select2 JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0-beta.1/js/select2.min.js"></script>
+
+    <!-- Tom Select CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css"
+      rel="stylesheet"
+    />
+
+    <!-- Tom Select JS -->
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+    <style>
+      body {
+        padding-top: 56px; /* Space for the fixed-top navbar */
+        background-color: #222222;
+        color: white;
+        font-family: 'Roboto', sans-serif;
+      }
+      .navbar {
+        background-color: #0f0f0f;
+        border-bottom: 1px solid #3a3a3a;
+      }
+      .navbar a {
+        color: white;
+        font-weight: bold;
+      }
+      .navbar .navbar-toggler-icon {
+        background-color: white;
+      }
+      .card {
+        background-color: #313131;
+        border-radius: 15px;
+        font-family: 'Nunito', sans-serif;
+        margin-bottom: 20px;
+      }
+      .card-header {
+        background-color: #444;
+        font-size: 1.2em;
+        color: white;
+      }
+      .card-body {
+        background-color: #272727;
+        border-radius: 0 0 15px 15px;
+      }
+      .btn {
+        background-color: #ca3e47;
+        border-color: #541f23;
+        border-radius: 10px;
+      }
+      .btn:hover {
+        background-color: #272727;
+        border-color: white;
+      }
+      .form-control-file {
+        border-radius: 10px;
+        background-color: white;
+        color: black;
+      }
+      .sidebar {
+        position: fixed;
+        top: 56px; /* Below the fixed-top navbar */
+        left: 0;
+        width: 200px;
+        height: 100%;
+        background-color: #0f0f0f;
+        color: #fff;
+        padding: 20px;
+        box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+        overflow-y: auto;
+      }
+      .sidebar a {
+        color: #fff;
+        text-decoration: none;
+        display: block;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 5px;
+        font-weight: 500;
+      }
+      .sidebar a:hover {
+        background-color: #1e1d1d;
+      }
+      .sidebar a.active {
+        background-color: #272727;
+      }
+      .main-content {
+        margin-left: 220px; /* Space for the sidebar */
+        padding: 20px;
+      }
+      footer {
+        color: #fff;
+        padding: 8px 0;
+        width: 100%;
+        bottom: 0;
+        position: relative;
+      }
+      .alert {
+        margin-top: 20px;
+      }
+
+      /* Mobile Responsiveness */
+      @media (max-width: 768px) {
+        .sidebar {
+          width: 100%;
+          height: auto;
+          position: relative;
+          top: 0;
+          box-shadow: none;
+        }
+        .main-content {
+          margin-left: 0;
+        }
+        .navbar {
+          padding: 0 10px;
+        }
+      }
+
+      /* Styling for form inputs */
+      .form-group label {
+        font-weight: bold;
+        color: #bbb;
+      }
+      .form-control {
+        border-radius: 10px;
+        background-color: white;
+        color: #000000;
+      }
+      #start_date, #end_date {
+        color: grey;
+      }
+      /* Custom styles for Select2 dropdown */
+      .select2-results__option {
+          color: black !important;
+      }
+
+      /* Ensure the selected option also appears with black text */
+      .select2-selection__rendered {
+          color: black !important;
+      }
+      /* Ensure Select2 dropdown matches the size of the other input fields */
+
+
+      /* Adjust the height of the Select2 dropdown to match input fields */
+      .select2-selection {
+          height: 38px !important; /* Adjust to match your input field height */
+          border-radius: 10px;
+      }
+
+      /* Make sure the dropdown options match the input field's font size and padding */
+      .select2-results__option {
+          padding: 8px 12px !important;
+          font-size: 14px;
+      }
+
+      /* Optional: Adjust the input field height to match your layout */
+      .form-control {
+          height: 38px; /* Adjust this value as needed */
+      }
+
+
+    </style>
+  </head>
+  <body>
+    <div class="container">
+        <h1>Spike Data</h1>
+
+        <!-- Success Message -->
+        {% if success %}
+        <div class="alert alert-success" role="alert">{{ message }}</div>
+        {% endif %}
+
+        <!-- Error Message -->
+        {% if error %}
+        <div class="alert alert-danger" role="alert">{{ error }}</div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-header">Upload File</div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <div class="form-group">
+                        <label for="file_upload">Select CSV or Excel File</label>
+                        <input type="file" class="form-control-file" id="file_upload" name="file_upload" />
+                    </div>
+
+                    <!-- Date Range Selection -->
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label for="start_date">Start Date</label>
+                            <input type="date" class="form-control" id="start_date" name="start_date" value="{{ stored_start_date }}" />
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label for="end_date">End Date</label>
+                            <input type="date" class="form-control" id="end_date" name="end_date" value="{{ stored_end_date }}" />
+                        </div>
+                    </div>
+
+                    <div class="form-group row">
+                        <div class="col-md-6">
+                            <label for="rate_of_change">Rate of Change</label>
+                            <input type="text" class="form-control" id="rate_of_change" name="rate_of_change" value="{{ stored_rate_of_change }}" />
+                        </div>
+                        <div class="col-md-6">
+                            <label for="station_name">Station Name</label>
+                            <select id="station_name" name="station_name" class="form-control">
+                                <option value="">Select Station</option>
+                                {% for station in stations %}
+                                <option value="{{ station.id }}" {% if station.station_name == stored_station_name %}selected{% endif %}>
+                                    {{ station.station_name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Upload</button>
+                    <a href="export-spikedata/" class="btn btn-success">Export to CSV</a>
+                </form>
+            </div>
+        </div>
+
+        <!-- Displaying Data Statistics -->
+        <div class="card mt-4">
+            <div class="card-header">Data Summary</div>
+            <div class="card-body">
+              <p>Last Uploaded File: {{ summary.last_uploaded_file_name }}</p>
+              <p>Total Data Points: {{ summary.total_data_points }}</p>
+              <p>Invalid Data Points: {{ summary.invalid_data_points }}</p>  <!-- Added -->
+              <p>Abnormal Data Points: {{ summary.abnormal_data_points }}</p>
+              
+              <p>Start Date: {{ summary.stored_start_date }}</p>
+              <p>End Date: {{ summary.stored_end_date }}</p>
+              <p>Rate of Change: {{ summary.stored_rate_of_change }}</p>
+              <p>Station Name: {{ summary.stored_station_name }}</p>
+            </div>            
+        </div>
+        <!-- Footer -->
+        <footer class="footer mt-auto py-3 text-white">
+          <div class="container text-center">
+            <span>© 2024 BWDB Data. All rights reserved.</span>
+          </div>
+        </footer>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            // Initialize Select2 for the station dropdown
+            $('#station_name').select2({
+                placeholder: "Select a station"
+            });
+        });
+    </script>
+</body>
+</html>

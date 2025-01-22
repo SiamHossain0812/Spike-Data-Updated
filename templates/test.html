@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spike Data</title>
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,200..1000;1,200..1000&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Include Select2 CSS -->
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0-beta.1/css/select2.min.css"
+      rel="stylesheet"
+    />
+
+    <style>
+      body {
+        padding-top: 56px; /* Space for the fixed-top navbar */
+        background-color: #222222;
+        color: white;
+      }
+      .navbar {
+        margin-bottom: 20px;
+        background-color: #0f0f0f;
+      }
+      .navbar a {
+        color: white;
+      }
+      .card {
+        background-color: #313131;
+        border-radius: 15px;
+        font-family: Roboto;
+      }
+      .card-body {
+        background-color: #272727;
+        border-bottom-left-radius: 15px;
+        border-bottom-right-radius: 15px;
+        font-family: Nunito;
+      }
+      .btn {
+        background-color: #ca3e47;
+        border-color: #541f23;
+        border-radius: 10px;
+      }
+      .form-control-file {
+        border-radius: 10px;
+        background-color: white;
+        color: black;
+      }
+      .sidebar {
+        position: fixed;
+        top: 56px;
+        left: 0;
+        width: 150px;
+        height: 100%;
+        background-color: #0f0f0f;
+        color: #fff;
+        padding: 20px;
+        box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+        overflow-y: auto;
+      }
+      .sidebar a {
+        color: #fff;
+        text-decoration: none;
+        display: block;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 5px;
+      }
+      .btn:hover {
+        background-color: #272727;
+        border-color: white;
+      }
+      .sidebar a:hover {
+        background-color: #1e1d1d;
+      }
+      .sidebar a.active {
+        background-color: #272727;
+      }
+      .main-content {
+        margin-left: 130px;
+        padding: 20px;
+      }
+      footer {
+        background-color: #0f0f0f;
+        color: #fff;
+        padding: 8px 0;
+        width: 100%;
+        bottom: 0;
+        position: relative;
+      }
+      @media (max-width: 768px) {
+        .sidebar {
+          width: 100%;
+          height: auto;
+          position: relative;
+          top: 0;
+          box-shadow: none;
+        }
+        .main-content {
+          margin-left: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg fixed-top">
+      <a class="navbar-brand" href="#">Spike Data</a>
+      <button
+        class="navbar-toggler"
+        type="button"
+        data-toggle="collapse"
+        data-target="#navbarNav"
+        aria-controls="navbarNav"
+        aria-expanded="false"
+        aria-label="Toggle navigation"
+      >
+        <span class="navbar-toggler-icon"></span>
+      </button>
+    </nav>
+
+    <!-- Sidebar -->
+    <div class="sidebar"></div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <div class="container">
+        <div class="row">
+          <div class="col-lg-8 offset-lg-2">
+            <h1 class="mt-4 mb-4">Spike Data</h1>
+
+            <!-- Success Message -->
+            {% if success %}
+            <div class="alert alert-success" role="alert">{{ message }}</div>
+            {% endif %}
+
+            <!-- Error Message -->
+            {% if error %}
+            <div class="alert alert-danger" role="alert">{{ error }}</div>
+            {% endif %}
+
+            <!-- File Upload Form -->
+            <div class="card mb-4">
+              <div class="card-header">Upload File</div>
+              <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                  {% csrf_token %}
+                  <div class="form-group">
+                    <label for="file_upload">Select CSV or Excel File</label>
+                    <input
+                      type="file"
+                      class="form-control-file"
+                      id="file_upload"
+                      name="file_upload"
+                    />
+                  </div>
+
+                  <!-- Date Range Selection -->
+                  <div class="form-row">
+                    <div class="form-group col-md-6">
+                      <label for="start_date">Start Date</label>
+                      <input
+                        type="date"
+                        class="form-control"
+                        id="start_date"
+                        name="start_date"
+                      />
+                    </div>
+                    <div class="form-group col-md-6">
+                      <label for="end_date">End Date</label>
+                      <input
+                        type="date"
+                        class="form-control"
+                        id="end_date"
+                        name="end_date"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label for="rate_of_change">Rate of Change</label>
+                    <input
+                      type="text"
+                      class="form-control"
+                      id="rate_of_change"
+                      name="rate_of_change"
+                      placeholder="Enter rate of change here"
+                    />
+                  </div>
+
+                  <div class="form-group">
+                    <label for="station_select">Select Station</label>
+                    <select
+                      class="form-control select2"
+                      id="station_select"
+                      name="station_select"
+                      style="width: 100%;"
+                    >
+                      <option value="">-- Select a station --</option>
+                      <option value="001">(GT7790023/DI-83) Tetulia, Panchagarh</option>
+                      <option value="002">(GT72918004/FA047) Boalmari Faridpur</option>
+                    </select>
+                  </div>
+
+                  <button type="submit" class="btn btn-primary">Upload</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer mt-auto py-3 text-white">
+      <div class="container text-center">
+        <span>© 2024 BWDB Data. All rights reserved.</span>
+      </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0-beta.1/js/select2.min.js"></script>
+    <script>
+      $(document).ready(function () {
+        $('#station_select').select2({
+          placeholder: 'Type to search station...',
+          allowClear: true
+        });
+      });
+    </script>
+  </body>
+</html>
