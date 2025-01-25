@@ -251,15 +251,14 @@
         <div class="card mt-4">
             <div class="card-header">Data Summary</div>
             <div class="card-body">
-              <p>Last Uploaded File: {{ summary.last_uploaded_file_name }}</p>
-              <p>Total Data Points: {{ summary.total_data_points }}</p>
-              <p>Invalid Data Points: {{ summary.invalid_data_points }}</p>  <!-- Added -->
-              <p>Abnormal Data Points: {{ summary.abnormal_data_points }}</p>
-              
-              <p>Start Date: {{ summary.stored_start_date }}</p>
-              <p>End Date: {{ summary.stored_end_date }}</p>
-              <p>Rate of Change: {{ summary.stored_rate_of_change }}</p>
-              <p>Station Name: {{ summary.stored_station_name }}</p>
+              <p><strong>Last Uploaded File:</strong> {{ summary.last_uploaded_file_name }}</p>
+              <p><strong>Total Data Points:</strong> {{ summary.total_data_points }}</p>
+              <p><strong>Total Segments:</strong> {{ summary.total_segments }}</p> <!-- Added -->
+              <p><strong>Abnormal Data Points:</strong> {{ summary.abnormal_data_points }}</p> <!-- Updated -->
+              <p><strong>Start Date:</strong> {{ summary.stored_start_date }}</p>
+              <p><strong>End Date:</strong> {{ summary.stored_end_date }}</p>
+              <p><strong>Rate of Change:</strong> {{ summary.stored_rate_of_change }}</p>
+              <p><strong>Station Name:</strong> {{ summary.stored_station_name }}</p>
             </div>            
         </div>
         <!-- Footer -->

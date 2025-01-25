@@ -6,9 +6,131 @@ from django.core.files.storage import FileSystemStorage
 from django.shortcuts import render
 from .models import SpikeData, StationName
 from django.http import HttpResponse
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.db import connection
 from django.http import JsonResponse
+
+def detect_gaps(data, interval_minutes=15, gap_threshold_points=192):
+    """
+    Detects gaps in the dataset where 192 or more consecutive data points are missing.
+    :param data: List of dictionaries with 'dateTime' and 'value'.
+    :param interval_minutes: Expected interval between data points (default 15 minutes).
+    :param gap_threshold_points: Number of missing consecutive points to consider as a gap (default 192).
+    :return: Tuple (segments, total_data_gaps), where:
+             segments: List of segments, each a list of data points.
+             total_data_gaps: Total number of missing data points between segments.
+    """
+    # Sort data by datetime
+    data.sort(key=lambda x: x['dateTime'])
+
+    # Generate the full range of expected timestamps
+    start_time = data[0]['dateTime']
+    end_time = data[-1]['dateTime']
+    expected_timestamps = [start_time + timedelta(minutes=i * interval_minutes)
+                           for i in range(int((end_time - start_time).total_seconds() / (interval_minutes * 60)) + 1)]
+    
+    # Identify missing timestamps
+    actual_timestamps = {point['dateTime'] for point in data}
+    missing_timestamps = [ts for ts in expected_timestamps if ts not in actual_timestamps]
+    
+    # Detect gaps of consecutive missing timestamps
+    gaps = []
+    current_gap = []
+
+    for ts in missing_timestamps:
+        if not current_gap or ts - current_gap[-1] == timedelta(minutes=interval_minutes):
+            current_gap.append(ts)
+        else:
+            if len(current_gap) >= gap_threshold_points:  # Check if the gap meets the threshold
+                gaps.append(current_gap)
+            current_gap = [ts]
+
+    # Check the last gap
+    if len(current_gap) >= gap_threshold_points:
+        gaps.append(current_gap)
+
+    # Split data into segments based on gaps
+    segments = []
+    previous_end_time = start_time
+
+    for gap in gaps:
+        # Collect data points before the gap
+        segment = [point for point in data if previous_end_time <= point['dateTime'] < gap[0]]
+        if segment:
+            segments.append(segment)
+        previous_end_time = gap[-1] + timedelta(minutes=interval_minutes)
+
+    # Add the remaining data after the last gap
+    last_segment = [point for point in data if point['dateTime'] >= previous_end_time]
+    if last_segment:
+        segments.append(last_segment)
+
+    # Calculate total data gaps
+    total_data_gaps = sum(len(gap) for gap in gaps)
+
+    return segments, total_data_gaps
+
+
+def process_segments_with_multiple_gaps(data, selected_station_info=None):
+    """
+    Processes a dataset with multiple gaps by splitting it into segments,
+    calculating thresholds, and replacing invalid/abnormal values for each segment.
+    :param data: List of data points (e.g., [{'dateTime': ..., 'value': ...}]).
+    :param selected_station_info: Station-specific information for threshold adjustments.
+    :return: Combined processed dataset and segment-specific summaries.
+    """
+    # Step 1: Detect gaps and split into segments
+    segments, total_data_gaps = detect_gaps(data)
+
+    # Log the total number of segments and total data gaps
+    print(f"Total Segments Created: {len(segments)}")
+    print(f"Total Data Gaps Between Segments: {total_data_gaps}")
+
+    # Step 2: Process each segment independently
+    processed_data = []
+    segment_summaries = []
+
+    for idx, segment in enumerate(segments):
+        print(f"\nProcessing Segment {idx + 1}...")
+
+        # Extract values for threshold calculation
+        values = [point['value'] for point in segment]
+
+        # Calculate thresholds for this segment
+        lower_threshold, upper_threshold = calculate_dynamic_thresholds(values)
+        print(f"Segment {idx + 1} Thresholds: Lower={lower_threshold}, Upper={upper_threshold}")
+
+        # Replace invalid/abnormal values
+        replaced_values, invalid_count, abnormal_count = replace_invalid_values(values, selected_station_info)
+
+        # Update processed data with modified values
+        for i, point in enumerate(segment):
+            processed_data.append({
+                'dateTime': point['dateTime'],
+                'original_value': point['value'],
+                'modified_value': replaced_values[i],
+            })
+
+        # Collect segment-specific summary
+        segment_summaries.append({
+            'segment_number': idx + 1,
+            'total_data_points': len(segment),
+            'invalid_count': invalid_count,
+            'abnormal_count': abnormal_count,
+            'lower_threshold': lower_threshold,
+            'upper_threshold': upper_threshold,
+        })
+
+    # Log segment-specific summaries
+    for summary in segment_summaries:
+        print(f"\nSummary for Segment {summary['segment_number']}:")
+        print(f"  Total Data Points: {summary['total_data_points']}")
+        print(f"  Invalid Count: {summary['invalid_count']}")
+        print(f"  Abnormal Count: {summary['abnormal_count']}")
+        print(f"  Thresholds -> Lower: {summary['lower_threshold']}, Upper: {summary['upper_threshold']}")
+
+    return processed_data, segment_summaries
+
 
 
 def is_invalid(val):
@@ -59,29 +181,33 @@ def is_abnormal_dynamic(values, index, lower_threshold, upper_threshold):
 
 import numpy as np
 
-def replace_invalid_values(values, selected_station_info):
+def replace_invalid_values(values, selected_station_info=None):
     """
-    Replace initial invalid values (starts with 9999, -9999999) with 0,
-    then replace abnormal (including 0) values with the average 
-    of the previous 4 and next 4 valid values if the difference between the
-    current and previous value is greater than 1. Incorporates threshold adjustments 
-    based on station-specific records if station info is provided.
+    Replace invalid values (e.g., starts with 9999, -9999999) with 0, 
+    then replace abnormal values with the average of the previous 4 and next 4 valid values.
+    Continuous abnormal segments of 4 or more consecutive points will be skipped.
+    Thresholds are adjusted based on station-specific records if station info is provided.
+
+    :param values: List or numpy array of values.
+    :param selected_station_info: Station-specific information for threshold adjustments.
+    :return: Tuple of (modified_values, invalid_count, abnormal_count).
     """
+    # Ensure it's a numpy array for easy manipulation
+    values = np.array(values, dtype=float)
+    
     # Calculate initial dynamic thresholds
-    values = np.array(values, dtype=float)  # Ensure it's a numpy array for easy manipulation
-    lower_threshold, upper_threshold = calculate_dynamic_thresholds(values)  # Initialize thresholds
-
+    lower_threshold, upper_threshold = calculate_dynamic_thresholds(values)
     print(f"DEBUG: Initial Calculated Thresholds -> Lower: {lower_threshold}, Upper: {upper_threshold}")
-
-    if selected_station_info:  # Check if station info is provided
-        # Extract the station code from the selected_station_info
+    
+    # Adjust thresholds based on station info (if provided)
+    if selected_station_info:
         try:
-            station_code = selected_station_info.split("(")[1].split(")")[0]  # Extract text inside the first set of parentheses
-            print(f"DEBUG: Extracted Station Code: {station_code}")  # Debug print for the station code
+            # Extract the station code from the selected_station_info
+            station_code = selected_station_info.split("(")[1].split(")")[0]
+            print(f"DEBUG: Extracted Station Code: {station_code}")
 
-            # Search for station-specific thresholds in the StationRecord table
-            station_record = StationRecord.objects.filter(station_id=station_code).first()  # Query the database
-
+            # Query for station-specific thresholds in the database
+            station_record = StationRecord.objects.filter(station_id=station_code).first()
             if station_record:
                 print(f"DEBUG: StationRecord found for {station_code}")
                 print(f"DEBUG: Recorded Thresholds -> Highest WL: {station_record.recorded_highest_wl}, "
@@ -92,13 +218,10 @@ def replace_invalid_values(values, selected_station_info):
                 upper_threshold = min(upper_threshold, station_record.recorded_highest_wl)
 
                 print(f"DEBUG: Adjusted Thresholds -> Lower: {lower_threshold}, Upper: {upper_threshold}")
-
             else:
                 print(f"DEBUG: No StationRecord found for {station_code}, using calculated thresholds.")
-
-        except IndexError:
-            print("DEBUG: Invalid station info format, skipping station-specific adjustments.")
-            pass
+        except (IndexError, AttributeError):
+            print("DEBUG: Invalid station info format or missing fields, skipping station-specific adjustments.")
 
     print(f"DEBUG: Final Thresholds Used -> Lower: {lower_threshold}, Upper: {upper_threshold}")
 
@@ -107,31 +230,52 @@ def replace_invalid_values(values, selected_station_info):
     invalid_count = 0  # Track invalid values count
     abnormal_count = 0  # Track abnormal values count
 
-    # Step 1: Replace invalid values (e.g., starts with 9999/-9999999) with 0 in modified_values
+    # Step 1: Replace invalid values (e.g., starts with 9999/-9999999) with 0
     for i, val in enumerate(modified_values):
-        if str(val).startswith('9999') or str(val).startswith('-9999999') or is_invalid(val):
-            modified_values[i] = float(f"{0:.3f}")  # Replace with 0.000
-            invalid_count += 1  # Increment invalid values count
+        if is_invalid(val):
+            modified_values[i] = 0.0  # Replace invalid value with 0
+            invalid_count += 1
 
-    # Step 2: Handle abnormal values (replace with surrounding mean of previous 4 and next 4 valid values)
+    # Step 2: Detect continuous abnormal segments
+    abnormal_flags = [is_abnormal_dynamic(modified_values, i, lower_threshold, upper_threshold) for i in range(len(modified_values))]
+    
+    continuous_abnormal_segments = []
+    current_segment = []
+
+    for i, flag in enumerate(abnormal_flags):
+        if flag:
+            current_segment.append(i)
+        else:
+            if len(current_segment) >= 4:
+                continuous_abnormal_segments.append(current_segment)
+            current_segment = []
+
+    # Check the last segment
+    if len(current_segment) >= 4:
+        continuous_abnormal_segments.append(current_segment)
+
+    # Step 3: Replace abnormal values outside continuous abnormal segments
     for i, val in enumerate(modified_values):
-        if i > 0 and abs(modified_values[i] - modified_values[i - 1]) <= 1:
-            # If the difference between the current and previous value is <= 1, skip replacement
+        # Skip if part of a continuous abnormal segment
+        if any(i in segment for segment in continuous_abnormal_segments):
             continue
 
-        if is_abnormal_dynamic(modified_values, i, lower_threshold, upper_threshold):  # Check if the value is abnormal
-            abnormal_count += 1  # Increment abnormal count
+        # Skip if the difference between current and previous value is <= 1
+        if i > 0 and abs(modified_values[i] - modified_values[i - 1]) <= 1:
+            continue
 
-            # Get the previous 4 valid values
-            prev_values = [v for v in modified_values[max(0, i-8):i] if not is_invalid(v)]
+        if abnormal_flags[i]:
+            abnormal_count += 1
 
-            # Combine previous and next valid values
-            surrounding_values = prev_values
+            # Collect previous 4 and next 4 valid values
+            prev_values = [v for v in modified_values[max(0, i - 4):i] if not is_invalid(v)]
+            next_values = [v for v in modified_values[i + 1:i + 5] if not is_invalid(v)]
+            surrounding_values = prev_values + next_values
 
-            # Calculate mean of surrounding valid values
+            # Replace with mean of surrounding valid values
             if surrounding_values:
-                mean = float(f"{np.mean(surrounding_values):.3f}")  # Ensure 3 digits after decimal
-                modified_values[i] = mean  # Replace abnormal value with the mean
+                mean = np.mean(surrounding_values)
+                modified_values[i] = float(f"{mean:.3f}")  # Ensure 3 decimal places
 
     # Ensure all values have 3 digits after decimal before returning
     modified_values = [float(f"{val:.3f}") for val in modified_values]
@@ -143,20 +287,19 @@ def replace_invalid_values(values, selected_station_info):
 # `calculate_dynamic_thresholds`, and `is_abnormal_dynamic`.
 # These helper functions should be defined elsewhere in the codebase.
 
-
 def spikedata(request):
     # Retrieve stored values from the session
     last_uploaded_file_name = request.session.get('uploaded_file_name', '')
     stored_start_date = request.session.get('start_date', '')
     stored_end_date = request.session.get('end_date', '')
     stored_rate_of_change = request.session.get('rate_of_change', '')
-    stored_station_id = request.session.get('station_id', '')  # Store station ID instead of name
+    stored_station_id = request.session.get('station_id', '')
 
     # Initialize formatted start and end date variables
     formatted_start_date = ''
     formatted_end_date = ''
-    station_name = ''  # Variable to store selected station name
-    selected_station_info = ''  # Variable to store station information
+    station_name = ''
+    selected_station_info = ''
 
     # Check if the form is submitted with a POST request
     if request.method == 'POST':
@@ -164,7 +307,7 @@ def spikedata(request):
         start_date = request.POST.get('start_date', '')
         end_date = request.POST.get('end_date', '')
         rate_of_change = request.POST.get('rate_of_change', '')
-        station_id = request.POST.get('station_name', '')  # Get station ID from the form
+        station_id = request.POST.get('station_name', '')
 
         # Convert start and end date to DD/MM/YYYY format
         try:
@@ -177,19 +320,18 @@ def spikedata(request):
             request.session['start_date'] = formatted_start_date
             request.session['end_date'] = formatted_end_date
             request.session['rate_of_change'] = rate_of_change
-            request.session['station_id'] = station_id  # Store station ID in session
+            request.session['station_id'] = station_id
 
         except ValueError:
             return render(request, 'spikedata.html', {'error': 'Invalid date format. Please use YYYY-MM-DD format.'})
 
         # Retrieve station name by ID from the database
         if station_id:
-            station = StationName.objects.filter(id=station_id).first()  # Retrieve station by ID
+            station = StationName.objects.filter(id=station_id).first()
             if station:
-                station_name = station.station_name  # Correctly access the 'station_name' field
-                # Format station information as "Station Name: [Station Name] ([Station ID])"
+                station_name = station.station_name
                 selected_station_info = f"Station Name: {station_name} ({station_id})"
-                print(f"DEBUG: Selected Station Info: {selected_station_info}")  # Debugging print statement
+                print(f"DEBUG: Selected Station Info: {selected_station_info}")
 
         # Handle file upload if a file is provided
         if 'file_upload' in request.FILES:
@@ -201,8 +343,6 @@ def spikedata(request):
             # Store the uploaded file name in session
             request.session['uploaded_file_name'] = filename
             all_data = []
-            total_invalid = 0
-            abnormal_count = 0
 
             # Handle CSV file processing
             if filename.endswith('.csv'):
@@ -219,9 +359,7 @@ def spikedata(request):
                                 value = None
 
                             if dateTime_str and value is not None:
-                                # Convert dateTime to %Y-%m-%d %H:%M:%S format
                                 try:
-                                    # Try parsing the dateTime in multiple formats
                                     dateTime_obj = datetime.strptime(dateTime_str, '%d/%m/%Y %H:%M')
                                 except ValueError:
                                     try:
@@ -230,9 +368,7 @@ def spikedata(request):
                                         dateTime_obj = None
 
                                 if dateTime_obj:
-                                    # Convert to desired format
-                                    formatted_dateTime = dateTime_obj.strftime('%Y-%m-%d %H:%M:%S')
-                                    all_data.append({'dateTime': formatted_dateTime, 'value': value})
+                                    all_data.append({'dateTime': dateTime_obj, 'value': value})
 
                 except UnicodeDecodeError:
                     return render(request, 'spikedata.html', {'error': 'Error decoding CSV file. Please check the file encoding and try again.'})
@@ -252,9 +388,7 @@ def spikedata(request):
                                 value = None
 
                             if dateTime_val and value is not None:
-                                # Convert dateTime to %Y-%m-%d %H:%M:%S format
                                 try:
-                                    # Try parsing the dateTime in multiple formats
                                     dateTime_obj = datetime.strptime(str(dateTime_val), '%d/%m/%Y %H:%M')
                                 except ValueError:
                                     try:
@@ -263,9 +397,7 @@ def spikedata(request):
                                         dateTime_obj = None
 
                                 if dateTime_obj:
-                                    # Convert to desired format
-                                    formatted_dateTime = dateTime_obj.strftime('%Y-%m-%d %H:%M:%S')
-                                    all_data.append({'dateTime': formatted_dateTime, 'value': value})
+                                    all_data.append({'dateTime': dateTime_obj, 'value': value})
 
                 except Exception as e:
                     return render(request, 'spikedata.html', {'error': f'Error processing Excel file: {str(e)}'})
@@ -273,66 +405,64 @@ def spikedata(request):
             else:
                 return render(request, 'spikedata.html', {'error': 'Unsupported file format.'})
 
-            # Prepare data for summary
-            values = [data['value'] for data in all_data]
+            # Detect gaps and process segments
+            processed_data, segment_summaries = process_segments_with_multiple_gaps(all_data, selected_station_info)
 
-            # Replace invalid and abnormal values, passing station information
-            replaced_values, invalid_count, abnormal_count = replace_invalid_values(values, selected_station_info)
+            # Count total abnormal points
+            total_abnormal_points = sum([summary['abnormal_count'] for summary in segment_summaries])
 
-            # Store the data back into the SpikeData model
+            # Log segment details
+            print(f"Total Segments Created: {len(segment_summaries)}")
+            for summary in segment_summaries:
+                print(f"Segment {summary['segment_number']}: Total Points={summary['total_data_points']}, "
+                      f"Invalid Count={summary['invalid_count']}, Abnormal Count={summary['abnormal_count']}, "
+                      f"Thresholds=[{summary['lower_threshold']}, {summary['upper_threshold']}]")
+
+            # Store processed data back into the SpikeData model
             SpikeData.objects.all().delete()
-
-            for i, data in enumerate(all_data):
+            for record in processed_data:
                 SpikeData.objects.create(
-                    dateTime=data['dateTime'],  # Store in %Y-%m-%d %H:%M:%S format
-                    value=data['value'],  # Original value
-                    modified_value=replaced_values[i]  # Modified value
+                    dateTime=record['dateTime'],
+                    value=record['original_value'],
+                    modified_value=record['modified_value']
                 )
 
             # Prepare the summary with the stored values included
             summary = {
                 'total_data_points': len(all_data),
-                'missing_data_points': total_invalid,
-                'invalid_data_points': invalid_count,  # Added
-                'abnormal_data_points': abnormal_count,
+                'total_segments': len(segment_summaries),
+                'invalid_data_points': sum([summary['invalid_count'] for summary in segment_summaries]),
+                'abnormal_data_points': sum([summary['abnormal_count'] for summary in segment_summaries]),  # Added
                 'last_uploaded_file_name': filename,
-                'stored_start_date': formatted_start_date,  # Added
-                'stored_end_date': formatted_end_date,      # Added
-                'stored_rate_of_change': rate_of_change,    # Added
-                'stored_station_name': station_name         # Added
+                'stored_start_date': formatted_start_date,
+                'stored_end_date': formatted_end_date,
+                'stored_rate_of_change': rate_of_change,
+                'stored_station_name': station_name
             }
 
-            # Return the rendered page with the updated summary and session data
             return render(request, 'spikedata.html', {
                 'success': True,
                 'message': 'File uploaded and data analyzed successfully.',
                 'summary': summary,
-                'stations': StationName.objects.all(),  # Ensure station names are passed
+                'stations': StationName.objects.all(),
             })
 
-    # Retrieve all station names from the database
-    stations = StationName.objects.all()  # Fetch station names from the StationName model
-
-    # Render the page when the form is first loaded or if there's no POST data
+    stations = StationName.objects.all()
     return render(request, 'spikedata.html', {
         'last_uploaded_file_name': last_uploaded_file_name,
         'summary': {
             'last_uploaded_file_name': last_uploaded_file_name,
             'total_data_points': 0,
             'missing_data_points': 0,
-            'invalid_data_points': 0,  # Added
-            'abnormal_data_points': 0,
-            'stored_start_date': stored_start_date,  # Added
-            'stored_end_date': stored_end_date,      # Added
-            'stored_rate_of_change': stored_rate_of_change,  # Added
-            'stored_station_name': station_name      # Display station name
+            'total_segments': 0,
+            'total_abnormal_points': 0,  # Default value for abnormal points
+            'stored_start_date': stored_start_date,
+            'stored_end_date': stored_end_date,
+            'stored_rate_of_change': stored_rate_of_change,
+            'stored_station_name': station_name
         },
         'stations': stations,
     })
-
-
-
-
 
 
 def export_spikedata(request):
