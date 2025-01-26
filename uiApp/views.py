@@ -77,7 +77,7 @@ def process_segments_with_multiple_gaps(data, selected_station_info=None):
     calculating thresholds, and replacing invalid/abnormal values for each segment.
     :param data: List of data points (e.g., [{'dateTime': ..., 'value': ...}]).
     :param selected_station_info: Station-specific information for threshold adjustments.
-    :return: Combined processed dataset and segment-specific summaries.
+    :return: Tuple (processed_data, segment_summaries, abnormal_details).
     """
     # Step 1: Detect gaps and split into segments
     segments, total_data_gaps = detect_gaps(data)
@@ -89,6 +89,7 @@ def process_segments_with_multiple_gaps(data, selected_station_info=None):
     # Step 2: Process each segment independently
     processed_data = []
     segment_summaries = []
+    abnormal_details = []  # Collect abnormal value details across all segments
 
     for idx, segment in enumerate(segments):
         print(f"\nProcessing Segment {idx + 1}...")
@@ -100,8 +101,12 @@ def process_segments_with_multiple_gaps(data, selected_station_info=None):
         lower_threshold, upper_threshold = calculate_dynamic_thresholds(values)
         print(f"Segment {idx + 1} Thresholds: Lower={lower_threshold}, Upper={upper_threshold}")
 
-        # Replace invalid/abnormal values
-        replaced_values, invalid_count, abnormal_count = replace_invalid_values(values, selected_station_info)
+        replaced_values, invalid_count, abnormal_count, segment_abnormal_details, modified_abnormal_count = replace_invalid_values(
+            values, selected_station_info
+        )
+
+        # Log modified abnormal count for the current segment
+        print(f"Segment {idx + 1}: Abnormal values modified: {modified_abnormal_count}")
 
         # Update processed data with modified values
         for i, point in enumerate(segment):
@@ -110,6 +115,12 @@ def process_segments_with_multiple_gaps(data, selected_station_info=None):
                 'original_value': point['value'],
                 'modified_value': replaced_values[i],
             })
+
+        # Add segment-specific abnormal details
+        for detail in segment_abnormal_details:
+            # Map index to the original datetime
+            detail['dateTime'] = segment[detail['index']]['dateTime']
+            abnormal_details.append(detail)
 
         # Collect segment-specific summary
         segment_summaries.append({
@@ -129,7 +140,8 @@ def process_segments_with_multiple_gaps(data, selected_station_info=None):
         print(f"  Abnormal Count: {summary['abnormal_count']}")
         print(f"  Thresholds -> Lower: {summary['lower_threshold']}, Upper: {summary['upper_threshold']}")
 
-    return processed_data, segment_summaries
+    return processed_data, segment_summaries, abnormal_details
+
 
 
 
@@ -183,14 +195,14 @@ import numpy as np
 
 def replace_invalid_values(values, selected_station_info=None):
     """
-    Replace invalid values (e.g., starts with 9999, -9999999) with 0, 
-    then replace abnormal values with the average of the previous 4 and next 4 valid values.
-    Continuous abnormal segments of 4 or more consecutive points will be skipped.
-    Thresholds are adjusted based on station-specific records if station info is provided.
+    Replace invalid values (e.g., starts with 9999, -9999999) with 0,
+    and replace abnormal values only if the difference from the previous value is greater than 1.
+    Abnormal values are replaced with the average of the previous 4 and next 4 valid values.
+    Additionally, tracks and returns abnormal value details.
 
     :param values: List or numpy array of values.
     :param selected_station_info: Station-specific information for threshold adjustments.
-    :return: Tuple of (modified_values, invalid_count, abnormal_count).
+    :return: Tuple of (modified_values, invalid_count, abnormal_count, abnormal_details, modified_abnormal_count).
     """
     # Ensure it's a numpy array for easy manipulation
     values = np.array(values, dtype=float)
@@ -229,6 +241,8 @@ def replace_invalid_values(values, selected_station_info=None):
     modified_values = values.copy()
     invalid_count = 0  # Track invalid values count
     abnormal_count = 0  # Track abnormal values count
+    modified_abnormal_count = 0  # Count how many abnormal values were actually modified
+    abnormal_details = []  # Collect details of abnormal values
 
     # Step 1: Replace invalid values (e.g., starts with 9999/-9999999) with 0
     for i, val in enumerate(modified_values):
@@ -236,51 +250,43 @@ def replace_invalid_values(values, selected_station_info=None):
             modified_values[i] = 0.0  # Replace invalid value with 0
             invalid_count += 1
 
-    # Step 2: Detect continuous abnormal segments
-    abnormal_flags = [is_abnormal_dynamic(modified_values, i, lower_threshold, upper_threshold) for i in range(len(modified_values))]
-    
-    continuous_abnormal_segments = []
-    current_segment = []
-
-    for i, flag in enumerate(abnormal_flags):
-        if flag:
-            current_segment.append(i)
-        else:
-            if len(current_segment) >= 4:
-                continuous_abnormal_segments.append(current_segment)
-            current_segment = []
-
-    # Check the last segment
-    if len(current_segment) >= 4:
-        continuous_abnormal_segments.append(current_segment)
-
-    # Step 3: Replace abnormal values outside continuous abnormal segments
+    # Step 2: Replace abnormal values only if the difference from the previous value > 1
     for i, val in enumerate(modified_values):
-        # Skip if part of a continuous abnormal segment
-        if any(i in segment for segment in continuous_abnormal_segments):
+        if i == 0:  # Skip the first value since there's no previous value to compare with
             continue
 
-        # Skip if the difference between current and previous value is <= 1
-        if i > 0 and abs(modified_values[i] - modified_values[i - 1]) <= 1:
-            continue
-
-        if abnormal_flags[i]:
+        if is_abnormal_dynamic(modified_values, i, lower_threshold, upper_threshold):
             abnormal_count += 1
 
-            # Collect previous 4 and next 4 valid values
-            prev_values = [v for v in modified_values[max(0, i - 4):i] if not is_invalid(v)]
-            next_values = [v for v in modified_values[i + 1:i + 5] if not is_invalid(v)]
-            surrounding_values = prev_values + next_values
+            # Compare with the previous value
+            if abs(modified_values[i] - modified_values[i - 1]) > 1:
+                # Collect previous 4 and next 4 valid values
+                prev_values = [v for v in modified_values[max(0, i - 4):i] if not is_invalid(v)]
+                next_values = [v for v in modified_values[i + 1:i + 5] if not is_invalid(v)]
+                surrounding_values = prev_values + next_values
 
-            # Replace with mean of surrounding valid values
-            if surrounding_values:
-                mean = np.mean(surrounding_values)
-                modified_values[i] = float(f"{mean:.3f}")  # Ensure 3 decimal places
+                # Replace with mean of surrounding valid values
+                if surrounding_values:
+                    mean = np.mean(surrounding_values)
+                    modified_value = float(f"{mean:.3f}")
+                    # Add to abnormal details
+                    abnormal_details.append({
+                        "index": i,
+                        "original_value": modified_values[i],
+                        "modified_value": modified_value
+                    })
+                    modified_values[i] = modified_value
+                    modified_abnormal_count += 1
 
     # Ensure all values have 3 digits after decimal before returning
     modified_values = [float(f"{val:.3f}") for val in modified_values]
 
-    return modified_values, invalid_count, abnormal_count
+    # Print abnormal value stats
+    print(f"Total abnormal values detected: {abnormal_count}")
+    print(f"Total abnormal values modified: {modified_abnormal_count}")
+
+    return modified_values, invalid_count, abnormal_count, abnormal_details, modified_abnormal_count
+
 
 
 # Note: This function assumes the existence of helper functions `is_invalid`, 
@@ -406,16 +412,13 @@ def spikedata(request):
                 return render(request, 'spikedata.html', {'error': 'Unsupported file format.'})
 
             # Detect gaps and process segments
-            processed_data, segment_summaries = process_segments_with_multiple_gaps(all_data, selected_station_info)
-
-            # Count total abnormal points
-            total_abnormal_points = sum([summary['abnormal_count'] for summary in segment_summaries])
+            processed_data, segment_summaries, abnormal_details = process_segments_with_multiple_gaps(all_data, selected_station_info)
 
             # Log segment details
             print(f"Total Segments Created: {len(segment_summaries)}")
             for summary in segment_summaries:
                 print(f"Segment {summary['segment_number']}: Total Points={summary['total_data_points']}, "
-                      f"Invalid Count={summary['invalid_count']}, Abnormal Count={summary['abnormal_count']}, "
+                      f"Invalid Count={summary['invalid_count']} "
                       f"Thresholds=[{summary['lower_threshold']}, {summary['upper_threshold']}]")
 
             # Store processed data back into the SpikeData model
@@ -432,7 +435,7 @@ def spikedata(request):
                 'total_data_points': len(all_data),
                 'total_segments': len(segment_summaries),
                 'invalid_data_points': sum([summary['invalid_count'] for summary in segment_summaries]),
-                'abnormal_data_points': sum([summary['abnormal_count'] for summary in segment_summaries]),  # Added
+                'abnormal_data_points': len(abnormal_details),  # Pass total abnormal points
                 'last_uploaded_file_name': filename,
                 'stored_start_date': formatted_start_date,
                 'stored_end_date': formatted_end_date,
@@ -444,6 +447,7 @@ def spikedata(request):
                 'success': True,
                 'message': 'File uploaded and data analyzed successfully.',
                 'summary': summary,
+                'abnormal_details': abnormal_details,  # Pass abnormal details to frontend
                 'stations': StationName.objects.all(),
             })
 
@@ -455,7 +459,7 @@ def spikedata(request):
             'total_data_points': 0,
             'missing_data_points': 0,
             'total_segments': 0,
-            'total_abnormal_points': 0,  # Default value for abnormal points
+            'total_abnormal_points': 0,
             'stored_start_date': stored_start_date,
             'stored_end_date': stored_end_date,
             'stored_rate_of_change': stored_rate_of_change,
@@ -463,6 +467,7 @@ def spikedata(request):
         },
         'stations': stations,
     })
+
 
 
 def export_spikedata(request):
